@@ -4,6 +4,7 @@ description = "An introduction to extracting request path segments, in a type sa
 version = "0.0.0"
 authors = ["Nicolas Pochet <npochet@gmail.com>"]
 publish = false
+edition = "2018"
 
 [dependencies]
 gotham = { path = "../../../gotham" }
