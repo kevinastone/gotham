@@ -1,6 +1,7 @@
 /// Test request behavior, shared between the tls::test and plain::test modules.
 pub mod request;
 
+use std::convert::TryFrom;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
@@ -8,14 +9,13 @@ use failure::format_err;
 use failure::ResultExt;
 
 use futures::prelude::*;
-use http::HttpTryFrom;
 use hyper::client::connect::Connect;
 use hyper::client::Client;
 use hyper::header::CONTENT_TYPE;
 use hyper::{Body, Method, Response, Uri};
 use log::warn;
 use mime;
-use tokio::timer::Delay;
+use tokio::time::Delay;
 
 use crate::error::*;
 
@@ -71,10 +71,10 @@ pub trait Server: Clone {
 
 impl<T: Server> BodyReader for T {
     fn read_body(&mut self, response: Response<Body>) -> Result<Vec<u8>> {
-        let f = response
-            .into_body()
-            .try_concat()
-            .map_ok(|chunk| chunk.into_iter().collect());
+        let f = response.into_body().try_fold(Vec::new(), |mut buf, chunk| {
+            buf.extend(chunk);
+            future::ok(buf)
+        });
         self.run_future(f)
     }
 }
@@ -85,11 +85,12 @@ pub struct TestClient<TS: Server, C: Connect> {
     pub(crate) test_server: TS,
 }
 
-impl<TS: Server + 'static, C: Connect + 'static> TestClient<TS, C> {
+impl<TS: Server + 'static, C: Connect + Clone + Send + Sync + 'static> TestClient<TS, C> {
     /// Begin constructing a HEAD request using this `TestClient`.
     pub fn head<U>(&self, uri: U) -> TestRequest<TS, C>
     where
-        Uri: HttpTryFrom<U>,
+        Uri: TryFrom<U>,
+        <Uri as TryFrom<U>>::Error: Into<http::Error>,
     {
         self.build_request(Method::HEAD, uri)
     }
@@ -97,7 +98,8 @@ impl<TS: Server + 'static, C: Connect + 'static> TestClient<TS, C> {
     /// Begin constructing a GET request using this `TestClient`.
     pub fn get<U>(&self, uri: U) -> TestRequest<TS, C>
     where
-        Uri: HttpTryFrom<U>,
+        Uri: TryFrom<U>,
+        <Uri as TryFrom<U>>::Error: Into<http::Error>,
     {
         self.build_request(Method::GET, uri)
     }
@@ -105,7 +107,8 @@ impl<TS: Server + 'static, C: Connect + 'static> TestClient<TS, C> {
     /// Begin constructing an OPTIONS request using this `TestClient`.
     pub fn options<U>(&self, uri: U) -> TestRequest<TS, C>
     where
-        Uri: HttpTryFrom<U>,
+        Uri: TryFrom<U>,
+        <Uri as TryFrom<U>>::Error: Into<http::Error>,
     {
         self.build_request(Method::OPTIONS, uri)
     }
@@ -114,7 +117,8 @@ impl<TS: Server + 'static, C: Connect + 'static> TestClient<TS, C> {
     pub fn post<B, U>(&self, uri: U, body: B, mime: mime::Mime) -> TestRequest<TS, C>
     where
         B: Into<Body>,
-        Uri: HttpTryFrom<U>,
+        Uri: TryFrom<U>,
+        <Uri as TryFrom<U>>::Error: Into<http::Error>,
     {
         self.build_request_with_body(Method::POST, uri, body, mime)
     }
@@ -123,7 +127,8 @@ impl<TS: Server + 'static, C: Connect + 'static> TestClient<TS, C> {
     pub fn put<B, U>(&self, uri: U, body: B, mime: mime::Mime) -> TestRequest<TS, C>
     where
         B: Into<Body>,
-        Uri: HttpTryFrom<U>,
+        Uri: TryFrom<U>,
+        <Uri as TryFrom<U>>::Error: Into<http::Error>,
     {
         self.build_request_with_body(Method::PUT, uri, body, mime)
     }
@@ -132,7 +137,8 @@ impl<TS: Server + 'static, C: Connect + 'static> TestClient<TS, C> {
     pub fn patch<B, U>(&self, uri: U, body: B, mime: mime::Mime) -> TestRequest<TS, C>
     where
         B: Into<Body>,
-        Uri: HttpTryFrom<U>,
+        Uri: TryFrom<U>,
+        <Uri as TryFrom<U>>::Error: Into<http::Error>,
     {
         self.build_request_with_body(Method::PATCH, uri, body, mime)
     }
@@ -140,7 +146,8 @@ impl<TS: Server + 'static, C: Connect + 'static> TestClient<TS, C> {
     /// Begin constructing a DELETE request using this `TestClient`.
     pub fn delete<U>(&self, uri: U) -> TestRequest<TS, C>
     where
-        Uri: HttpTryFrom<U>,
+        Uri: TryFrom<U>,
+        <Uri as TryFrom<U>>::Error: Into<http::Error>,
     {
         self.build_request(Method::DELETE, uri)
     }
@@ -148,7 +155,8 @@ impl<TS: Server + 'static, C: Connect + 'static> TestClient<TS, C> {
     /// Begin constructing a request with the given HTTP method and URI.
     pub fn build_request<U>(&self, method: Method, uri: U) -> TestRequest<TS, C>
     where
-        Uri: HttpTryFrom<U>,
+        Uri: TryFrom<U>,
+        <Uri as TryFrom<U>>::Error: Into<http::Error>,
     {
         TestRequest::new(self, method, uri)
     }
@@ -163,7 +171,8 @@ impl<TS: Server + 'static, C: Connect + 'static> TestClient<TS, C> {
     ) -> TestRequest<TS, C>
     where
         B: Into<Body>,
-        Uri: HttpTryFrom<U>,
+        Uri: TryFrom<U>,
+        <Uri as TryFrom<U>>::Error: Into<http::Error>,
     {
         let mut request = self.build_request(method, uri);
 

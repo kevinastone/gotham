@@ -2,30 +2,29 @@
 //!
 //! See the `TestServer` type for example usage.
 
+use http::Uri;
 use std::net::{self, IpAddr, SocketAddr};
 use std::panic::UnwindSafe;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use failure;
 use failure::ResultExt;
 use log::info;
 
 use futures::prelude::*;
-use hyper::client::{
-    connect::{Connect, Connected, Destination},
-    Client,
-};
+use hyper::client::Client;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
-use tokio::timer::{delay, Delay};
+use tokio::time::{delay_for, Delay};
 
 use tokio::net::TcpStream;
-
-use crate::handler::NewHandler;
+use tower_service::Service;
 
 use crate::error::*;
+use crate::handler::NewHandler;
 
 use crate::test::{self, TestClient};
 
@@ -75,7 +74,9 @@ impl Clone for TestServer {
 
 impl test::Server for TestServer {
     fn request_expiry(&self) -> Delay {
-        delay(Instant::now() + Duration::from_secs(self.data.timeout))
+        // println!("{:?}", self.data.runtime.write().unwrap());
+        let runtime = self.data.runtime.write().unwrap();
+        runtime.enter(|| delay_for(Duration::from_secs(self.data.timeout)))
     }
 
     fn run_future<F, R, E>(&self, future: F) -> Result<R>
@@ -84,19 +85,21 @@ impl test::Server for TestServer {
         R: Send + 'static,
         E: failure::Fail,
     {
-        let (tx, rx) = futures::channel::oneshot::channel();
-        self.spawn(
-            future
-                .then(move |r| future::ready(tx.send(r).map_err(|_| unreachable!())))
-                .then(|_| future::ready(())), // ignore the result for spawn
-        );
+        let rx = future;
+        // let (tx, rx) = futures::channel::oneshot::channel();
+        // self.spawn(
+        //     future
+        //         .then(move |r| future::ready(tx.send(r).map_err(|_| unreachable!())))
+        //         .then(|_| future::ready(())), // ignore the result for spawn
+        // );
 
         self.data
             .runtime
             .write()
             .expect("unable to acquire write lock")
             .block_on(rx)
-            .unwrap()
+            // .map(|r| r.compat())
+            // .unwrap()
             .map_err(Into::into)
     }
 }
@@ -122,7 +125,7 @@ impl TestServer {
     where
         NH::Instance: UnwindSafe,
     {
-        let runtime = Runtime::new()?;
+        let mut runtime = Runtime::new()?;
         // TODO: Fix this into an async flow
         let listener = runtime.block_on(TcpListener::bind(
             "127.0.0.1:0".parse::<SocketAddr>().compat()?,
@@ -200,19 +203,19 @@ pub struct TestConnect {
     pub(crate) addr: SocketAddr,
 }
 
-impl Connect for TestConnect {
-    type Transport = TcpStream;
+impl Service<Uri> for TestConnect {
+    type Response = TcpStream;
     type Error = CompatError;
-    type Future = Pin<
-        Box<
-            dyn Future<Output = std::result::Result<(Self::Transport, Connected), Self::Error>>
-                + Send,
-        >,
-    >;
-    fn connect(&self, _dst: Destination) -> Self::Future {
+    type Future =
+        Pin<Box<dyn Future<Output = std::result::Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        Ok(()).into()
+    }
+
+    fn call(&mut self, _req: Uri) -> Self::Future {
         TcpStream::connect(self.addr)
             .inspect(|s| info!("Client TcpStream connected: {:?}", s))
-            .map_ok(|s| (s, Connected::new()))
             .map_err(|e| Error::from(e).compat())
             .boxed()
     }
@@ -222,11 +225,11 @@ impl Connect for TestConnect {
 mod tests {
     use super::*;
 
-    use std::time::{SystemTime, UNIX_EPOCH};
-
+    use bytes::BytesMut;
     use hyper::header::CONTENT_LENGTH;
     use hyper::{Body, Response, StatusCode, Uri};
     use mime;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::handler::{Handler, HandlerFuture, IntoHandlerError, NewHandler};
     use crate::helpers::http::response::create_response;
@@ -367,7 +370,10 @@ mod tests {
     fn async_echo() {
         fn handler(mut state: State) -> Pin<Box<HandlerFuture>> {
             Body::take_from(&mut state)
-                .try_concat()
+                .try_fold(BytesMut::new(), |mut buf, chunk| {
+                    buf.extend(chunk);
+                    future::ok(buf)
+                })
                 .then(move |full_body| match full_body {
                     Ok(body) => {
                         let resp_data = body.to_vec();

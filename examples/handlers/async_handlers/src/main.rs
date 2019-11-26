@@ -1,5 +1,5 @@
 //! A basic example showing the request components
-
+extern crate bytes;
 extern crate futures;
 extern crate gotham;
 #[macro_use]
@@ -42,7 +42,10 @@ fn http_get(url_str: &str) -> ResponseContentFuture {
     let f = client.get(url).and_then(|response| {
         response
             .into_body()
-            .try_concat()
+            .try_fold(bytes::BytesMut::new(), |mut buf, chunk| {
+                buf.extend(chunk);
+                future::ok(buf)
+            })
             .and_then(|full_body| future::ok(full_body.to_vec()))
     });
 

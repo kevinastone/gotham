@@ -1,10 +1,12 @@
 //! A basic example showing the request components
 
+extern crate bytes;
 extern crate futures;
 extern crate gotham;
 extern crate hyper;
 extern crate mime;
 
+use bytes::BytesMut;
 use futures::prelude::*;
 use hyper::{Body, HeaderMap, Method, Response, StatusCode, Uri, Version};
 use std::pin::Pin;
@@ -31,7 +33,10 @@ fn print_request_elements(state: &State) {
 fn post_handler(mut state: State) -> Pin<Box<HandlerFuture>> {
     print_request_elements(&state);
     let f = Body::take_from(&mut state)
-        .try_concat()
+        .try_fold(BytesMut::new(), |mut buf, chunk| {
+            buf.extend(chunk);
+            future::ok(buf)
+        })
         .then(|full_body| match full_body {
             Ok(valid_body) => {
                 let body_content = String::from_utf8(valid_body.to_vec()).unwrap();

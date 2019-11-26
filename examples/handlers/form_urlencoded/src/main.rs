@@ -1,11 +1,13 @@
 //! An example of decoding requests from an HTML form element
 
+extern crate bytes;
 extern crate futures;
 extern crate gotham;
 extern crate hyper;
 extern crate mime;
 extern crate url;
 
+use bytes::BytesMut;
 use futures::prelude::*;
 use hyper::{Body, StatusCode};
 use std::pin::Pin;
@@ -20,10 +22,13 @@ use gotham::state::{FromState, State};
 /// Extracts the elements of the POST request and responds with the form keys and values
 fn form_handler(mut state: State) -> Pin<Box<HandlerFuture>> {
     let f = Body::take_from(&mut state)
-        .try_concat()
+        .try_fold(BytesMut::new(), |mut buf, chunk| {
+            buf.extend(chunk);
+            future::ok(buf)
+        })
         .then(|full_body| match full_body {
             Ok(valid_body) => {
-                let body_content = valid_body.into_bytes();
+                let body_content = valid_body.freeze();
                 // Perform decoding on request body
                 let form_data = form_urlencoded::parse(&body_content).into_owned();
                 // Add form keys and values to response body

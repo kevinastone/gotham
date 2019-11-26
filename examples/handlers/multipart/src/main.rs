@@ -1,11 +1,12 @@
 //! An example of decoding multipart form requests
-
+extern crate bytes;
 extern crate futures;
 extern crate gotham;
 extern crate hyper;
 extern crate mime;
 extern crate multipart;
 
+use bytes::BytesMut;
 use futures::prelude::*;
 use gotham::handler::{HandlerFuture, IntoHandlerError};
 use gotham::helpers::http::response::create_response;
@@ -33,7 +34,10 @@ fn form_handler(mut state: State) -> Pin<Box<HandlerFuture>> {
         .unwrap();
 
     Body::take_from(&mut state)
-        .try_concat()
+        .try_fold(BytesMut::new(), |mut buf, chunk| {
+            buf.extend(chunk);
+            future::ok(buf)
+        })
         .then(|full_body| match full_body {
             Ok(valid_body) => {
                 let mut m = Multipart::with_body(Cursor::new(valid_body), boundary);
