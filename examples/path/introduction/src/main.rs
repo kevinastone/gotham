@@ -44,7 +44,9 @@ struct PathExtractor {
 }
 
 /// Handler function for `GET` requests directed to `/products/:name`
-fn get_product_handler(state: State) -> (State, String) {
+async fn get_product_handler(
+    state: State,
+) -> Result<(State, String), (State, gotham::handler::HandlerError)> {
     let message = {
         // Access the `PathExtractor` instance from `state` which was put there for us by the
         // `Router` during request evaluation.
@@ -56,7 +58,7 @@ fn get_product_handler(state: State) -> (State, String) {
         format!("Product: {}", product.name)
     };
 
-    (state, message)
+    Ok((state, message))
 }
 
 /// Create a `Router`

@@ -23,12 +23,14 @@ pub mod assets;
 
 pub use self::error::{HandlerError, IntoHandlerError};
 
+type HandlerResult = std::result::Result<(State, Response<Body>), (State, HandlerError)>;
 /// A type alias for the trait objects returned by `HandlerService`.
 ///
 /// When the `Future` resolves to an error, the `(State, HandlerError)` value is used to generate
 /// an appropriate HTTP error response.
-pub type HandlerFuture =
-    dyn Future<Output = std::result::Result<(State, Response<Body>), (State, HandlerError)>> + Send;
+pub type HandlerFuture = dyn Future<Output = HandlerResult> + Send;
+
+type BoxHandlerFuture<'a> = Pin<Box<dyn Future<Output = HandlerResult> + Send + 'a>>;
 
 /// A `Handler` is an asynchronous function, taking a `State` value which represents the request
 /// and related runtime state, and returns a future which resolves to a response.
@@ -281,20 +283,17 @@ pub trait IntoHandlerFuture {
     fn into_handler_future(self) -> Pin<Box<HandlerFuture>>;
 }
 
-impl<T> IntoHandlerFuture for (State, T)
+impl<'a, F, T> IntoHandlerFuture for F
 where
+    F: Future<Output = std::result::Result<(State, T), (State, HandlerError)>> + Send + 'a,
     T: IntoResponse,
+    'a: 'static,
 {
-    fn into_handler_future(self) -> Pin<Box<HandlerFuture>> {
-        let (state, t) = self;
-        let response = t.into_response(&state);
-        future::ok((state, response)).boxed()
-    }
-}
-
-impl IntoHandlerFuture for Pin<Box<HandlerFuture>> {
-    fn into_handler_future(self) -> Pin<Box<HandlerFuture>> {
-        self
+    fn into_handler_future(self) -> BoxHandlerFuture<'static> {
+        Box::pin(self.map_ok(|(state, t)| {
+            let response = t.into_response(&state);
+            (state, response)
+        }))
     }
 }
 
